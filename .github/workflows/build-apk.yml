@@ -1,0 +1,33 @@
+name: Build OffGridTrack APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodları Çek
+        uses: actions/checkout@v4
+
+      - name: JDK 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Android SDK Kur ve APK Derle
+        uses: android-actions/setup-android@v3
+
+      - name: Gradle ile APK Üret
+        run: |
+          gradle wrapper --gradle-version 8.4
+          ./gradlew assembleDebug
+
+      - name: Çalışan APK Dosyasını Yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: OffGridTrack-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
