@@ -1,15 +1,24 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Theme.MaterialComponents.DayNight.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Primary brand color. -->
-        <item name="colorPrimary">#38BDF8</item>
-        <item name="colorPrimaryVariant">#0284C7</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <!-- Secondary brand color. -->
-        <item name="colorSecondary">#1E293B</item>
-        <item name="colorSecondaryVariant">#0F172A</item>
-        <item name="colorOnSecondary">#FFFFFF</item>
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">#1E293B</item>
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.OffGridTrack" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent_cyan</item>
+        <item name="colorOnPrimary">@color/bg_base</item>
+        <item name="colorPrimaryContainer">@color/accent_cyan_container</item>
+        <item name="colorOnPrimaryContainer">@color/text_primary</item>
+
+        <item name="colorSecondary">@color/accent_emerald</item>
+        <item name="colorOnSecondary">@color/bg_base</item>
+        <item name="colorSecondaryContainer">@color/accent_emerald_container</item>
+        <item name="colorOnSecondaryContainer">@color/text_primary</item>
+
+        <item name="colorError">@color/accent_rose</item>
+        <item name="colorSurface">@color/bg_surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/border_subtle</item>
+
+        <item name="android:colorBackground">@color/bg_base</item>
+        <item name="android:statusBarColor">@color/bg_base</item>
+        <item name="android:navigationBarColor">@color/bg_surface</item>
     </style>
 </resources>

@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <!-- Outer soft halo -->
+    <path
+        android:fillColor="#4D38BDF8"
+        android:pathData="M16,2 A14,14 0 1,0 16,30 A14,14 0 1,0 16,2 Z" />
+    <!-- Crisp white ring -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M16,7 A9,9 0 1,0 16,25 A9,9 0 1,0 16,7 Z" />
+    <!-- Inner cyan core -->
+    <path
+        android:fillColor="#FF0284C7"
+        android:pathData="M16,10 A6,6 0 1,0 16,22 A6,6 0 1,0 16,10 Z" />
+</vector>

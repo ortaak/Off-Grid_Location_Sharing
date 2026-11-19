@@ -1,3 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OffGrid Konum</string>
+    <string name="status_gps_searching">Uydu aranıyor...</string>
+    <string name="status_gps_locked">GPS Kilitli</string>
+    <string name="status_gps_disabled">GPS Kapalı</string>
+    <string name="hint_phone">Telefon No (+905...)</string>
+    <string name="hint_secret_key">Ortak Şifreleme Anahtarı (min. 10 krk.)</string>
+    <string name="btn_generate_key">Güçlü Anahtar Üret</string>
+    <string name="btn_copy_key">Kopyala</string>
+    <string name="btn_add_peer">Ekle</string>
+    <string name="btn_offline_download">Haritayı Çevrimdışı İndir</string>
+    <string name="btn_clear_data">Verileri Sıfırla</string>
 </resources>
