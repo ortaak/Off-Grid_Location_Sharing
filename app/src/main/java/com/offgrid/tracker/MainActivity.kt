@@ -59,7 +59,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private val cryptoExecutor = Executors.newSingleThreadExecutor()
     private val uiHandler = Handler(Looper.getMainLooper())
 
-    private var currentMapStyle: MapStyle = MapStyle.VOYAGER
+    private var currentMapStyle: MapStyle = MapStyle.OSM
     private var compassOverlay: CompassOverlay? = null
     private var myMarker: Marker? = null
     private var myLastLocation: Location? = null
@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
         currentMapStyle = MapStyle.fromId(storage.getMapStyle())
 
         binding.mapView.apply {
-            setTileSource(OfflineMapManager.getTileSource(currentMapStyle))
+            OfflineMapManager.applyMapStyle(this, currentMapStyle)
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             minZoomLevel = 3.0
@@ -719,9 +719,9 @@ class MainActivity : AppCompatActivity(), LocationListener {
             .setSingleChoiceItems(labels, currentIdx) { dialog, which ->
                 currentMapStyle = styles[which]
                 storage.saveMapStyle(currentMapStyle.id)
-                binding.mapView.setTileSource(OfflineMapManager.getTileSource(currentMapStyle))
-                binding.mapView.invalidate()
+                OfflineMapManager.applyMapStyle(binding.mapView, currentMapStyle)
                 dialog.dismiss()
+                updateCacheInfo()
                 showBanner("Harita stili: ${currentMapStyle.displayName}")
             }
             .setNeutralButton("Önbelleği Temizle") { _, _ ->

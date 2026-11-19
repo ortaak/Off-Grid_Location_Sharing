@@ -165,7 +165,7 @@ class SecureStorage(context: Context) {
     }
 
     fun getMapStyle(): String {
-        return prefs.getString(KEY_MAP_STYLE, MapStyle.VOYAGER.id) ?: MapStyle.VOYAGER.id
+        return prefs.getString(KEY_MAP_STYLE, MapStyle.OSM.id) ?: MapStyle.OSM.id
     }
 
     fun clearAll() {

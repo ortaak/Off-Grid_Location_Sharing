@@ -1,23 +1,31 @@
 package com.offgrid.tracker
 
 import android.content.Context
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import java.io.File
 import java.util.Locale
 
-enum class MapStyle(val id: String, val displayName: String, val description: String) {
-    VOYAGER("voyager", "Modern Harita", "Net sokak ve yol görünümü (Önerilen)"),
-    DARK("dark", "Koyu Taktik", "Gece kullanımı ve pil tasarrufu"),
+enum class MapStyle(
+    val id: String,
+    val displayName: String,
+    val description: String,
+    val isDarkFilter: Boolean = false
+) {
+    OSM("osm", "Standart Harita (OSM)", "Net sokak, yol ve yer isimleri (Önerilen)"),
+    DARK("dark", "Koyu Taktik (Gece)", "Gece modu ve OLED pil tasarrufu (OSM tabanlı)", isDarkFilter = true),
     TOPO("topo", "Arazi / Topoğrafik", "Yükselti eğrileri ve doğa rotaları"),
-    OSM("osm", "OpenStreetMap", "Klasik OSM standart harita");
+    SATELLITE("satellite", "Uydu Görüntüsü", "Yüksek çözünürlüklü uydu haritası (Esri)");
 
     companion object {
-        fun fromId(id: String): MapStyle = values().firstOrNull { it.id == id } ?: VOYAGER
+        fun fromId(id: String): MapStyle = values().firstOrNull { it.id == id } ?: OSM
     }
 }
 
@@ -25,28 +33,11 @@ object OfflineMapManager {
 
     const val MAX_OFFLINE_TILES_PER_DOWNLOAD = 600
 
-    val VOYAGER_SOURCE: OnlineTileSourceBase = XYTileSource(
-        "CartoVoyager",
+    val OSM_SOURCE: OnlineTileSourceBase = XYTileSource(
+        "OSMStandardHTTPS",
         0, 19, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://d.basemaps.cartocdn.com/rastertiles/voyager/"
-        ),
-        "© OpenStreetMap contributors, © CARTO"
-    )
-
-    val DARK_SOURCE: OnlineTileSourceBase = XYTileSource(
-        "CartoDark",
-        0, 19, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/dark_all/",
-            "https://b.basemaps.cartocdn.com/dark_all/",
-            "https://c.basemaps.cartocdn.com/dark_all/",
-            "https://d.basemaps.cartocdn.com/dark_all/"
-        ),
-        "© OpenStreetMap contributors, © CARTO"
+        arrayOf("https://tile.openstreetmap.org/"),
+        "© OpenStreetMap contributors"
     )
 
     val TOPO_SOURCE: OnlineTileSourceBase = XYTileSource(
@@ -60,12 +51,41 @@ object OfflineMapManager {
         "© OpenStreetMap contributors, SRTM | © OpenTopoMap"
     )
 
-    val OSM_SOURCE: OnlineTileSourceBase = XYTileSource(
-        "OSMStandardHTTPS",
-        0, 19, 256, ".png",
-        arrayOf("https://tile.openstreetmap.org/"),
-        "© OpenStreetMap contributors"
-    )
+    // Esri ArcGIS World Imagery: API anahtarı gerektirmez ({z}/{y}/{x} sırasıyla çalışır)
+    val SATELLITE_SOURCE: OnlineTileSourceBase = object : OnlineTileSourceBase(
+        "EsriWorldImagery",
+        0, 18, 256, "",
+        arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"),
+        "Tiles © Esri"
+    ) {
+        override fun getTileURLString(pMapTileIndex: Long): String {
+            val z = MapTileIndex.getZoom(pMapTileIndex)
+            val y = MapTileIndex.getY(pMapTileIndex)
+            val x = MapTileIndex.getX(pMapTileIndex)
+            return "${baseUrl}$z/$y/$x"
+        }
+    }
+
+    /**
+     * OSM haritası için renk tonunu koruyan Koyu Taktik filtresi (Invert + 180° Hue Rotation).
+     * Denizler koyu lacivert, parklar koyu yeşil, yollar ve yazılar yüksek kontrastlı açık ton olur.
+     */
+    private val DARK_TACTICAL_FILTER: ColorMatrixColorFilter by lazy {
+        // Luminance weights (Rec.709): lr=0.213, lg=0.715, lb=0.072
+        // Invert(HueRotate180(RGB)) = 255 - M_hue180 * RGB
+        val lr = 0.213f
+        val lg = 0.715f
+        val lb = 0.072f
+        val matrix = ColorMatrix(
+            floatArrayOf(
+                1f - 2f * lr, -2f * lg, -2f * lb, 0f, 245f,
+                -2f * lr, 1f - 2f * lg, -2f * lb, 0f, 245f,
+                -2f * lr, -2f * lg, 1f - 2f * lb, 0f, 245f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        ColorMatrixColorFilter(matrix)
+    }
 
     /**
      * OSMDroid yapılandırmasını Android 10-14 (Scoped Storage) ile tam uyumlu
@@ -79,13 +99,17 @@ object OfflineMapManager {
         config.load(appContext, prefs)
 
         // OSM sunucuları geçerli ve açıklayıcı User-Agent zorunlu kılar
-        config.userAgentValue = "OffGridTrack/2.0 (Android; ${appContext.packageName})"
+        config.userAgentValue = "OffGridTrack/2.1 (Android; ${appContext.packageName})"
 
         // Android 10+ Scoped Storage uyumlu yazılabilir önbellek dizini
         val basePath = File(appContext.filesDir, "osmdroid").apply { mkdirs() }
         val tileCache = File(basePath, "tiles").apply { mkdirs() }
         config.osmdroidBasePath = basePath
         config.osmdroidTileCache = tileCache
+
+        // Eski sürümden kalan CARTO (API key isteyen) önbellek klasörlerini otomatik temizle
+        File(tileCache, "CartoVoyager").takeIf { it.exists() }?.deleteRecursively()
+        File(tileCache, "CartoDark").takeIf { it.exists() }?.deleteRecursively()
 
         // Çevrimdışı önbellek boyut limitleri (250 MB)
         config.tileFileSystemCacheMaxBytes = 250L * 1024L * 1024L
@@ -95,11 +119,18 @@ object OfflineMapManager {
 
     fun getTileSource(style: MapStyle): OnlineTileSourceBase {
         return when (style) {
-            MapStyle.VOYAGER -> VOYAGER_SOURCE
-            MapStyle.DARK -> DARK_SOURCE
+            MapStyle.OSM, MapStyle.DARK -> OSM_SOURCE
             MapStyle.TOPO -> TOPO_SOURCE
-            MapStyle.OSM -> OSM_SOURCE
+            MapStyle.SATELLITE -> SATELLITE_SOURCE
         }
+    }
+
+    fun applyMapStyle(mapView: MapView, style: MapStyle) {
+        mapView.setTileSource(getTileSource(style))
+        mapView.overlayManager.tilesOverlay.setColorFilter(
+            if (style.isDarkFilter) DARK_TACTICAL_FILTER else null
+        )
+        mapView.invalidate()
     }
 
     fun estimateDownloadTileCount(mapView: MapView): Triple<Int, Int, Int> {
