@@ -15,6 +15,10 @@
 ### 2. Harita ve Çevrimdışı Önbellek Düzeltmeleri
 - Android 10–14 (Scoped Storage) uyumlu dahili OSMDroid önbellek dizini (`filesDir/osmdroid/tiles`), uyumlu `User-Agent`, `INTERNET` izni ve tam `onResume`/`onPause` yaşam döngüsü eklendi.
 - **4 Farklı API-Key Gerektirmeyen HTTPS Harita Stili:** Standart Harita (OpenStreetMap), Koyu Taktik / Gece Modu (OSM + renk tonu koruyan koyu filtre), Arazi/Topoğrafik (OpenTopoMap) ve Uydu Görüntüsü (Esri World Imagery).
+- **Yerli & Kurumsal Harita Desteği (v2.2):**
+  - **HGM Atlas (`api.harita.gov.tr`):** Kendi API anahtarınızla Temel, Ortofoto, Topoğrafik ve Gece katmanları (Android Keystore şifreli).
+  - **Özel Kurumsal Sunucu (TUCBS / WMS / XYZ):** Yalnızca HTTPS destekli özel XYZ/WMTS veya OGC WMS (`EPSG:3857`) katmanları ve izole yetki başlığı desteği.
+  - **Yerel Çevrimdışı Harita Paketleri (`.mbtiles` / `.sqlite` / `.gemf` / `.zip`):** Ek depolama izni istemeden (SAF) dosya başlığı doğrulamasıyla cihazdan tamamen internetsiz harita yükleme.
 - **Dahili Çevrimdışı Bölge İndirici:** İnternet varken haritadaki mevcut alanı tek tıkla cihaza önbelleğe alın; arazide tamamen internetsiz kullanın.
 
 ### 3. Sıkılaştırılmış Güvenlik Mimarisi

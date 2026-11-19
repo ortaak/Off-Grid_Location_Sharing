@@ -503,11 +503,22 @@
                     android:text="Manuel" />
             </com.google.android.material.chip.ChipGroup>
 
-            <!-- BÖLÜM 4: Çevrimdışı Harita & Sıfırlama -->
-            <LinearLayout
+            <!-- BÖLÜM 4: Yerli / Özel Haritalar, Çevrimdışı İndir & Sıfırlama -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDomesticMaps"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:text="@string/btn_domestic_maps"
+                android:textSize="12sp"
+                app:cornerRadius="12dp"
+                app:icon="@drawable/ic_layers" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal">
 
                 <com.google.android.material.button.MaterialButton

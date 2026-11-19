@@ -24,6 +24,43 @@ data class PeerContact(
         get() = PhoneNumberUtils.canonicalKey(phone)
 }
 
+data class HgmConfig(
+    val apiKey: String = "",
+    val layer: String = LAYER_TEMEL,
+    val urlTemplate: String = DEFAULT_URL_TEMPLATE,
+    val referer: String = ""
+) {
+    val isConfigured: Boolean
+        get() = apiKey.isNotBlank() && urlTemplate.startsWith("https://")
+
+    companion object {
+        const val LAYER_TEMEL = "temel"
+        const val LAYER_ORTOFOTO = "ortofoto"
+        const val LAYER_TOPO = "topo"
+        const val LAYER_GECE = "gece"
+
+        const val DEFAULT_URL_TEMPLATE =
+            "https://atlas.harita.gov.tr/webservis/{layer}/{z}/{x}/{y}.png?apikey={key}"
+    }
+}
+
+data class CustomMapConfig(
+    val name: String = "",
+    val protocol: String = PROTOCOL_XYZ,
+    val urlTemplate: String = "",
+    val wmsLayers: String = "",
+    val authHeader: String = ""
+) {
+    val isConfigured: Boolean
+        get() = urlTemplate.startsWith("https://") &&
+            (protocol == PROTOCOL_XYZ || wmsLayers.isNotBlank())
+
+    companion object {
+        const val PROTOCOL_XYZ = "XYZ"
+        const val PROTOCOL_WMS = "WMS"
+    }
+}
+
 class SecureStorage(context: Context) {
 
     companion object {
@@ -38,6 +75,9 @@ class SecureStorage(context: Context) {
         private const val KEY_PEERS = "enc_peers"
         private const val KEY_INTERVAL_SEC = "interval_sec"
         private const val KEY_MAP_STYLE = "map_style"
+        private const val KEY_HGM_CONFIG = "enc_hgm_config"
+        private const val KEY_CUSTOM_MAP_CONFIG = "enc_custom_map_config"
+        private const val KEY_OFFLINE_ARCHIVE = "offline_archive_name"
 
         const val DEFAULT_INTERVAL_SEC = 60
 
@@ -147,9 +187,79 @@ class SecureStorage(context: Context) {
                 }
             }
         } catch (_: Exception) {
-            // Bozuk kayıt varsa boş liste dön
         }
         return result
+    }
+
+    fun saveHgmConfig(config: HgmConfig) {
+        val obj = JSONObject().apply {
+            put("apiKey", config.apiKey)
+            put("layer", config.layer)
+            put("urlTemplate", config.urlTemplate)
+            put("referer", config.referer)
+        }
+        val enc = encryptString(obj.toString())
+        if (enc != null) {
+            prefs.edit().putString(KEY_HGM_CONFIG, enc).apply()
+        }
+    }
+
+    fun getHgmConfig(): HgmConfig {
+        val json = decryptString(prefs.getString(KEY_HGM_CONFIG, null)) ?: return HgmConfig()
+        return try {
+            val obj = JSONObject(json)
+            HgmConfig(
+                apiKey = obj.optString("apiKey", ""),
+                layer = obj.optString("layer", HgmConfig.LAYER_TEMEL),
+                urlTemplate = obj.optString("urlTemplate", HgmConfig.DEFAULT_URL_TEMPLATE)
+                    .ifBlank { HgmConfig.DEFAULT_URL_TEMPLATE },
+                referer = obj.optString("referer", "")
+            )
+        } catch (_: Exception) {
+            HgmConfig()
+        }
+    }
+
+    fun saveCustomMapConfig(config: CustomMapConfig) {
+        val obj = JSONObject().apply {
+            put("name", config.name)
+            put("protocol", config.protocol)
+            put("urlTemplate", config.urlTemplate)
+            put("wmsLayers", config.wmsLayers)
+            put("authHeader", config.authHeader)
+        }
+        val enc = encryptString(obj.toString())
+        if (enc != null) {
+            prefs.edit().putString(KEY_CUSTOM_MAP_CONFIG, enc).apply()
+        }
+    }
+
+    fun getCustomMapConfig(): CustomMapConfig {
+        val json = decryptString(prefs.getString(KEY_CUSTOM_MAP_CONFIG, null)) ?: return CustomMapConfig()
+        return try {
+            val obj = JSONObject(json)
+            CustomMapConfig(
+                name = obj.optString("name", ""),
+                protocol = obj.optString("protocol", CustomMapConfig.PROTOCOL_XYZ),
+                urlTemplate = obj.optString("urlTemplate", ""),
+                wmsLayers = obj.optString("wmsLayers", ""),
+                authHeader = obj.optString("authHeader", "")
+            )
+        } catch (_: Exception) {
+            CustomMapConfig()
+        }
+    }
+
+    fun saveActiveOfflineArchive(fileName: String) {
+        if (fileName.isBlank()) {
+            prefs.edit().remove(KEY_OFFLINE_ARCHIVE).apply()
+        } else {
+            prefs.edit().putString(KEY_OFFLINE_ARCHIVE, fileName).apply()
+        }
+    }
+
+    fun getActiveOfflineArchive(): String {
+        return prefs.getString(KEY_OFFLINE_ARCHIVE, "").orEmpty()
     }
 
     fun saveIntervalSeconds(seconds: Int) {

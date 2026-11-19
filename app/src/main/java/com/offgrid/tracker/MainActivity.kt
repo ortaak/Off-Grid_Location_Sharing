@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PersistableBundle
 import android.provider.ContactsContract
+import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
@@ -37,6 +38,8 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.offgrid.tracker.databinding.ActivityMainBinding
+import com.offgrid.tracker.databinding.DialogCustomMapConfigBinding
+import com.offgrid.tracker.databinding.DialogHgmConfigBinding
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -82,6 +85,50 @@ class MainActivity : AppCompatActivity(), LocationListener {
             }
             updateSharingSubtitle()
             uiHandler.postDelayed(this, 15_000L)
+        }
+    }
+
+    // Ek depolama izni istemeden (SAF OpenDocument) yerel .mbtiles/.sqlite/.zip harita seçici
+    private val openArchiveLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        var displayName = "offline_map.mbtiles"
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) {
+                    displayName = cursor.getString(idx)?.trim().orEmpty().ifBlank { displayName }
+                }
+            }
+        }
+
+        val progressDialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Çevrimdışı Harita Aktarılıyor")
+            .setMessage("$displayName doğrulanıyor ve güvenli depolamaya kopyalanıyor...")
+            .setCancelable(false)
+            .show()
+
+        cryptoExecutor.execute {
+            val result = OfflineMapManager.importOfflineArchive(this, uri, displayName)
+            runOnUiThread {
+                progressDialog.dismiss()
+                when (result) {
+                    is ArchiveImportResult.Success -> {
+                        storage.saveActiveOfflineArchive(result.file.name)
+                        switchMapStyle(MapStyle.OFFLINE_ARCHIVE)
+                        result.metadata?.let { meta ->
+                            meta.center?.let { center ->
+                                binding.mapView.controller.animateTo(center, meta.zoom ?: 12.0, 600L)
+                            }
+                        }
+                        showBanner("Yerel çevrimdışı harita hazır: ${result.file.name}")
+                    }
+                    is ArchiveImportResult.Error -> {
+                        showBanner(result.reason, isError = true)
+                    }
+                }
+            }
         }
     }
 
@@ -228,7 +275,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
         currentMapStyle = MapStyle.fromId(storage.getMapStyle())
 
         binding.mapView.apply {
-            OfflineMapManager.applyMapStyle(this, currentMapStyle)
+            val applyResult = OfflineMapManager.applyMapStyle(this@MainActivity, this, currentMapStyle, storage)
+            if (!applyResult.success) {
+                currentMapStyle = MapStyle.OSM
+                storage.saveMapStyle(MapStyle.OSM.id)
+            }
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             minZoomLevel = 3.0
@@ -410,7 +461,8 @@ class MainActivity : AppCompatActivity(), LocationListener {
             updateSharingSubtitle()
         }
 
-        // Çevrimdışı Harita İndir & Verileri Sıfırla
+        // Yerli/Özel Haritalar, Çevrimdışı İndir & Verileri Sıfırla
+        binding.btnDomesticMaps.setOnClickListener { showDomesticAndCustomMapsMenu() }
         binding.btnOfflineDownload.setOnClickListener { startOfflineRegionDownload() }
         binding.btnClearData.setOnClickListener { confirmClearAllData() }
     }
@@ -709,34 +761,384 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
     }
 
+    private fun switchMapStyle(style: MapStyle): Boolean {
+        val result = OfflineMapManager.applyMapStyle(this, binding.mapView, style, storage)
+        if (!result.success) {
+            showBanner(result.message ?: "Harita kaynağı açılamadı.", isError = true)
+            return false
+        }
+        currentMapStyle = style
+        storage.saveMapStyle(style.id)
+        updateCacheInfo()
+        result.metadata?.center?.let { center ->
+            binding.mapView.controller.animateTo(center, result.metadata.zoom ?: 12.0, 500L)
+        }
+        return true
+    }
+
     private fun showMapLayerDialog() {
         val styles = MapStyle.values()
-        val labels = styles.map { "${it.displayName} — ${it.description}" }.toTypedArray()
+        val hgm = storage.getHgmConfig()
+        val custom = storage.getCustomMapConfig()
+        val activeArchive = storage.getActiveOfflineArchive()
+
+        val labels = styles.map { style ->
+            when (style) {
+                MapStyle.HGM_ATLAS -> {
+                    if (hgm.isConfigured) {
+                        "${style.displayName} — Aktif katman: ${hgm.layer}"
+                    } else {
+                        "${style.displayName} — API anahtarı girmek için seçin"
+                    }
+                }
+                MapStyle.CUSTOM_CORPORATE -> {
+                    if (custom.isConfigured) {
+                        "${custom.name.ifBlank { style.displayName }} (${custom.protocol})"
+                    } else {
+                        "${style.displayName} — URL tanımlamak için seçin"
+                    }
+                }
+                MapStyle.OFFLINE_ARCHIVE -> {
+                    if (activeArchive.isNotBlank()) {
+                        "${style.displayName} — $activeArchive"
+                    } else {
+                        "${style.displayName} — Dosya yüklemek için seçin"
+                    }
+                }
+                else -> "${style.displayName} — ${style.description}"
+            }
+        }.toTypedArray()
+
         val currentIdx = styles.indexOf(currentMapStyle).coerceAtLeast(0)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Harita Stili & Çevrimdışı Önbellek")
+            .setTitle("Harita Stili & Yerli / Özel Kaynaklar")
             .setSingleChoiceItems(labels, currentIdx) { dialog, which ->
-                currentMapStyle = styles[which]
-                storage.saveMapStyle(currentMapStyle.id)
-                OfflineMapManager.applyMapStyle(binding.mapView, currentMapStyle)
+                val selected = styles[which]
                 dialog.dismiss()
-                updateCacheInfo()
-                showBanner("Harita stili: ${currentMapStyle.displayName}")
+                when (selected) {
+                    MapStyle.HGM_ATLAS -> {
+                        if (!storage.getHgmConfig().isConfigured) {
+                            showHgmConfigDialog()
+                        } else if (switchMapStyle(selected)) {
+                            showBanner("HGM Atlas aktif (${storage.getHgmConfig().layer})")
+                        }
+                    }
+                    MapStyle.CUSTOM_CORPORATE -> {
+                        if (!storage.getCustomMapConfig().isConfigured) {
+                            showCustomMapConfigDialog()
+                        } else if (switchMapStyle(selected)) {
+                            val cfg = storage.getCustomMapConfig()
+                            showBanner("Özel kaynak aktif: ${cfg.name.ifBlank { cfg.protocol }}")
+                        }
+                    }
+                    MapStyle.OFFLINE_ARCHIVE -> {
+                        val active = storage.getActiveOfflineArchive()
+                        val exists = OfflineMapManager.getOfflineArchiveFile(this, active)?.exists() == true
+                        if (!exists) {
+                            showOfflineArchivesDialog()
+                        } else if (switchMapStyle(selected)) {
+                            showBanner("Yerel çevrimdışı harita aktif: $active")
+                        }
+                    }
+                    else -> {
+                        if (switchMapStyle(selected)) {
+                            showBanner("Harita stili: ${selected.displayName}")
+                        }
+                    }
+                }
             }
-            .setNeutralButton("Önbelleği Temizle") { _, _ ->
-                OfflineMapManager.clearTileCache(this)
-                updateCacheInfo()
-                showBanner("Çevrimdışı harita önbelleği temizlendi.")
+            .setNeutralButton("Yerli / Özel Ayarlar") { _, _ ->
+                showDomesticAndCustomMapsMenu()
             }
-            .setPositiveButton("Bölgeyi Çevrimdışı İndir") { _, _ ->
+            .setPositiveButton("Bölgeyi İndir") { _, _ ->
                 startOfflineRegionDownload()
             }
             .setNegativeButton("Kapat", null)
             .show()
     }
 
+    private fun showDomesticAndCustomMapsMenu() {
+        val hgm = storage.getHgmConfig()
+        val custom = storage.getCustomMapConfig()
+        val archivesCount = OfflineMapManager.listOfflineArchives(this).size
+
+        val items = arrayOf(
+            "1. HGM Atlas (API Key & Katman) — ${if (hgm.isConfigured) "Ayarlı (${hgm.layer})" else "Ayarlanmadı"}",
+            "2. Özel Kurumsal Sunucu (TUCBS / WMS / XYZ) — ${if (custom.isConfigured) custom.name.ifBlank { custom.protocol } else "Ayarlanmadı"}",
+            "3. Yerel Çevrimdışı Paket (.mbtiles / .sqlite) — $archivesCount dosya",
+            "4. Çevrimdışı Karo Önbelleğini Temizle (${OfflineMapManager.getCacheSizeFormatted(this)})"
+        )
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Yerli & Özel Harita Yönetimi")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showHgmConfigDialog()
+                    1 -> showCustomMapConfigDialog()
+                    2 -> showOfflineArchivesDialog()
+                    3 -> {
+                        OfflineMapManager.clearTileCache(this)
+                        updateCacheInfo()
+                        showBanner("Çevrimdışı harita karo önbelleği temizlendi.")
+                    }
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun showHgmConfigDialog() {
+        val dialogBinding = DialogHgmConfigBinding.inflate(layoutInflater)
+        val current = storage.getHgmConfig()
+
+        dialogBinding.hgmApiKeyInput.setText(current.apiKey)
+        dialogBinding.hgmUrlInput.setText(current.urlTemplate)
+        dialogBinding.hgmRefererInput.setText(current.referer)
+
+        when (current.layer) {
+            HgmConfig.LAYER_ORTOFOTO -> dialogBinding.chipHgmOrtofoto.isChecked = true
+            HgmConfig.LAYER_TOPO -> dialogBinding.chipHgmTopo.isChecked = true
+            HgmConfig.LAYER_GECE -> dialogBinding.chipHgmGece.isChecked = true
+            else -> dialogBinding.chipHgmTemel.isChecked = true
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("HGM Atlas (Harita Genel Müdürlüğü)")
+            .setView(dialogBinding.root)
+            .setPositiveButton("Kaydet ve Kullan", null)
+            .setNeutralButton("Temizle") { _, _ ->
+                storage.saveHgmConfig(HgmConfig())
+                if (currentMapStyle == MapStyle.HGM_ATLAS) {
+                    switchMapStyle(MapStyle.OSM)
+                }
+                showBanner("HGM Atlas anahtarı ve ayarları silindi.")
+            }
+            .setNegativeButton("İptal", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val apiKey = dialogBinding.hgmApiKeyInput.text?.toString()?.trim().orEmpty()
+                val urlTemplate = dialogBinding.hgmUrlInput.text?.toString()?.trim()
+                    .orEmpty().ifBlank { HgmConfig.DEFAULT_URL_TEMPLATE }
+                val referer = dialogBinding.hgmRefererInput.text?.toString()?.trim().orEmpty()
+
+                if (apiKey.isBlank()) {
+                    dialogBinding.hgmApiKeyLayout.error = "HGM API anahtarı gerekli"
+                    return@setOnClickListener
+                }
+                dialogBinding.hgmApiKeyLayout.error = null
+
+                val urlErr = OfflineMapManager.validateHttpsUrl(urlTemplate)
+                if (urlErr != null) {
+                    dialogBinding.hgmUrlLayout.error = urlErr
+                    return@setOnClickListener
+                }
+                dialogBinding.hgmUrlLayout.error = null
+
+                val layer = when (dialogBinding.hgmLayerChipGroup.checkedChipId) {
+                    R.id.chipHgmOrtofoto -> HgmConfig.LAYER_ORTOFOTO
+                    R.id.chipHgmTopo -> HgmConfig.LAYER_TOPO
+                    R.id.chipHgmGece -> HgmConfig.LAYER_GECE
+                    else -> HgmConfig.LAYER_TEMEL
+                }
+
+                storage.saveHgmConfig(
+                    HgmConfig(
+                        apiKey = apiKey,
+                        layer = layer,
+                        urlTemplate = urlTemplate,
+                        referer = referer
+                    )
+                )
+                dialog.dismiss()
+                if (switchMapStyle(MapStyle.HGM_ATLAS)) {
+                    showBanner("HGM Atlas ($layer) aktif edildi.")
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showCustomMapConfigDialog() {
+        val dialogBinding = DialogCustomMapConfigBinding.inflate(layoutInflater)
+        val current = storage.getCustomMapConfig()
+
+        dialogBinding.customMapNameInput.setText(current.name)
+        dialogBinding.customUrlInput.setText(current.urlTemplate)
+        dialogBinding.customWmsLayersInput.setText(current.wmsLayers)
+        dialogBinding.customAuthHeaderInput.setText(current.authHeader)
+
+        fun updateProtocolFields(isWms: Boolean) {
+            dialogBinding.customWmsLayersLayout.visibility = if (isWms) View.VISIBLE else View.GONE
+            dialogBinding.customUrlLayout.hint = if (isWms) {
+                "HTTPS WMS Temel Adresi (örn: https://servis.kurum.gov.tr/wms)"
+            } else {
+                "HTTPS XYZ/WMTS Şablonu (örn: https://.../tiles/{z}/{x}/{y}.png)"
+            }
+        }
+
+        val initiallyWms = current.protocol == CustomMapConfig.PROTOCOL_WMS
+        if (initiallyWms) {
+            dialogBinding.chipProtocolWms.isChecked = true
+        } else {
+            dialogBinding.chipProtocolXyz.isChecked = true
+        }
+        updateProtocolFields(initiallyWms)
+
+        dialogBinding.customProtocolChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
+            updateProtocolFields(checkedIds.firstOrNull() == R.id.chipProtocolWms)
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Özel Kurumsal Harita (TUCBS / WMS / XYZ)")
+            .setView(dialogBinding.root)
+            .setPositiveButton("Kaydet ve Kullan", null)
+            .setNeutralButton("Temizle") { _, _ ->
+                storage.saveCustomMapConfig(CustomMapConfig())
+                if (currentMapStyle == MapStyle.CUSTOM_CORPORATE) {
+                    switchMapStyle(MapStyle.OSM)
+                }
+                showBanner("Özel kurumsal harita ayarları silindi.")
+            }
+            .setNegativeButton("İptal", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = dialogBinding.customMapNameInput.text?.toString()?.trim().orEmpty()
+                val isWms = dialogBinding.customProtocolChipGroup.checkedChipId == R.id.chipProtocolWms
+                val url = dialogBinding.customUrlInput.text?.toString()?.trim().orEmpty()
+                val layers = dialogBinding.customWmsLayersInput.text?.toString()?.trim().orEmpty()
+                val authHeader = dialogBinding.customAuthHeaderInput.text?.toString()?.trim().orEmpty()
+
+                val urlErr = OfflineMapManager.validateHttpsUrl(url)
+                if (urlErr != null) {
+                    dialogBinding.customUrlLayout.error = urlErr
+                    return@setOnClickListener
+                }
+                if (!isWms && (!url.contains("{z}") || !url.contains("{x}") || !url.contains("{y}"))) {
+                    dialogBinding.customUrlLayout.error = "XYZ/WMTS adresi {z}, {x}, {y} yer tutucularını içermelidir."
+                    return@setOnClickListener
+                }
+                dialogBinding.customUrlLayout.error = null
+
+                if (isWms && layers.isBlank()) {
+                    dialogBinding.customWmsLayersLayout.error = "WMS için katman adı (LAYERS) gerekli."
+                    return@setOnClickListener
+                }
+                dialogBinding.customWmsLayersLayout.error = null
+
+                storage.saveCustomMapConfig(
+                    CustomMapConfig(
+                        name = name.ifBlank { if (isWms) "Kurumsal WMS" else "Kurumsal XYZ" },
+                        protocol = if (isWms) CustomMapConfig.PROTOCOL_WMS else CustomMapConfig.PROTOCOL_XYZ,
+                        urlTemplate = url,
+                        wmsLayers = layers,
+                        authHeader = authHeader
+                    )
+                )
+                dialog.dismiss()
+                if (switchMapStyle(MapStyle.CUSTOM_CORPORATE)) {
+                    showBanner("Özel kurumsal harita aktif edildi.")
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showOfflineArchivesDialog() {
+        val archives = OfflineMapManager.listOfflineArchives(this)
+        val activeName = storage.getActiveOfflineArchive()
+
+        if (archives.isEmpty()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Yerel Çevrimdışı Haritalar (.mbtiles)")
+                .setMessage(
+                    "Cihazda henüz içe aktarılmış .mbtiles, .sqlite, .gemf veya .zip harita paketi yok.\n\nQGIS veya yasal harita araçlarıyla oluşturduğunuz Türkiye harita paketlerini ek depolama izni vermeden güvenle yükleyebilirsiniz."
+                )
+                .setPositiveButton("Dosya Seç ve Yükle") { _, _ ->
+                    launchArchiveFilePicker()
+                }
+                .setNegativeButton("Kapat", null)
+                .show()
+            return
+        }
+
+        val labels = archives.map { file ->
+            val activeMark = if (file.name == activeName && currentMapStyle == MapStyle.OFFLINE_ARCHIVE) " ✓" else ""
+            "${file.name} (${OfflineMapManager.formatBytes(file.length())})$activeMark"
+        }.toTypedArray()
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Yerel Çevrimdışı Harita Paketleri")
+            .setItems(labels) { _, which ->
+                val selectedFile = archives[which]
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(selectedFile.name)
+                    .setMessage("Boyut: ${OfflineMapManager.formatBytes(selectedFile.length())}\nTamamen internetsiz olarak bu paketi haritada açabilir veya cihazdan silebilirsiniz.")
+                    .setPositiveButton("Haritada Aç") { _, _ ->
+                        storage.saveActiveOfflineArchive(selectedFile.name)
+                        if (switchMapStyle(MapStyle.OFFLINE_ARCHIVE)) {
+                            showBanner("Çevrimdışı paket aktif: ${selectedFile.name}")
+                        }
+                    }
+                    .setNeutralButton("Dosyayı Sil") { _, _ ->
+                        val wasActive = selectedFile.name == storage.getActiveOfflineArchive()
+                        OfflineMapManager.deleteOfflineArchive(this, selectedFile.name)
+                        if (wasActive) {
+                            storage.saveActiveOfflineArchive("")
+                            if (currentMapStyle == MapStyle.OFFLINE_ARCHIVE) {
+                                switchMapStyle(MapStyle.OSM)
+                            }
+                        }
+                        updateCacheInfo()
+                        showBanner("${selectedFile.name} silindi.")
+                    }
+                    .setNegativeButton("İptal", null)
+                    .show()
+            }
+            .setPositiveButton("Yeni Dosya Yükle") { _, _ ->
+                launchArchiveFilePicker()
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun launchArchiveFilePicker() {
+        try {
+            openArchiveLauncher.launch(arrayOf("*/*"))
+        } catch (_: Exception) {
+            showBanner("Dosya seçici açılamadı.", isError = true)
+        }
+    }
+
     private fun startOfflineRegionDownload() {
+        if (currentMapStyle == MapStyle.OFFLINE_ARCHIVE) {
+            showBanner("Zaten yerel çevrimdışı harita paketi (.mbtiles/.sqlite) kullanıyorsunuz.")
+            return
+        }
+        if (currentMapStyle == MapStyle.HGM_ATLAS || currentMapStyle == MapStyle.CUSTOM_CORPORATE) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Kurumsal Kaynak Kullanım Uyarısı")
+                .setMessage(
+                    "HGM Atlas ve kurumsal harita servislerinin kullanım sözleşmeleri genellikle toplu karo indirmeyi (bulk caching) kısıtlar.\n\nÇevrimdışı arazi kullanımı için OpenStreetMap / OpenTopoMap indirmeniz veya yasal yerel .mbtiles paketi yüklemeniz önerilir."
+                )
+                .setPositiveButton("Yine de İndir") { _, _ ->
+                    executeOfflineRegionDownload()
+                }
+                .setNeutralButton("Yerel .mbtiles Yükle") { _, _ ->
+                    launchArchiveFilePicker()
+                }
+                .setNegativeButton("Vazgeç", null)
+                .show()
+            return
+        }
+        executeOfflineRegionDownload()
+    }
+
+    private fun executeOfflineRegionDownload() {
         val (estimated, minZoom, maxZoom) = OfflineMapManager.estimateDownloadTileCount(binding.mapView)
         if (estimated > OfflineMapManager.MAX_OFFLINE_TILES_PER_DOWNLOAD) {
             showBanner(
@@ -808,7 +1210,9 @@ class MainActivity : AppCompatActivity(), LocationListener {
             appendLine("• Tekrar (Replay) Koruması: Aktif (Zaman damgası + IV önbelleği)")
             appendLine("• Gönderici Beyaz Listesi: Aktif (${peers.size} izinli numara)")
             appendLine("• Ekran Güvenliği (FLAG_SECURE): Aktif (Ekran görüntüsü engelli)")
-            appendLine("• Yerel Depolama: Android Keystore Donanım Şifreli")
+            appendLine("• Yerel Depolama: Android Keystore Donanım Şifreli (Grup & HGM/Kurumsal Anahtarlar)")
+            appendLine("• Harita Ağ Güvenliği: Yalnızca HTTPS + Sunucular Arası Başlık İzolasyonu")
+            appendLine("• Çevrimdışı Paket Güvenliği: Depolama izinsiz (SAF) + SQLite/ZIP başlık doğrulama")
             appendLine("• Ortak Anahtar Durumu: ${if (keyEval.isValid) keyEval.feedback else "Henüz geçerli anahtar yok"}")
         }
 
@@ -822,7 +1226,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private fun confirmClearAllData() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Tüm Verileri Sıfırla")
-            .setMessage("Kayıtlı ortak anahtar, izinli numara listesi ve haritadaki konum geçmişi tamamen silinecek. Emin misiniz?")
+            .setMessage("Kayıtlı ortak anahtar, HGM/kurumsal API anahtarları, izinli numara listesi ve haritadaki konum geçmişi tamamen silinecek. Emin misiniz?")
             .setPositiveButton("Sil ve Sıfırla") { _, _ ->
                 if (LocationTrackingService.isRunning) {
                     stopTrackingService()
@@ -834,7 +1238,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
                 peerLines.values.forEach { binding.mapView.overlays.remove(it) }
                 peerMarkers.clear()
                 peerLines.clear()
-                binding.mapView.invalidate()
+                switchMapStyle(MapStyle.OSM)
 
                 binding.secretKeyInput.text?.clear()
                 binding.phoneInput.text?.clear()
@@ -850,7 +1254,13 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
     private fun updateCacheInfo() {
         val sizeStr = OfflineMapManager.getCacheSizeFormatted(this)
-        binding.cacheInfoText.text = "Çevrimdışı harita önbelleği: $sizeStr • Stil: ${currentMapStyle.displayName}"
+        val styleLabel = when (currentMapStyle) {
+            MapStyle.OFFLINE_ARCHIVE -> storage.getActiveOfflineArchive().ifBlank { currentMapStyle.displayName }
+            MapStyle.HGM_ATLAS -> "HGM (${storage.getHgmConfig().layer})"
+            MapStyle.CUSTOM_CORPORATE -> storage.getCustomMapConfig().name.ifBlank { currentMapStyle.displayName }
+            else -> currentMapStyle.displayName
+        }
+        binding.cacheInfoText.text = "Çevrimdışı depolama: $sizeStr • Aktif: $styleLabel"
     }
 
     private fun copyToClipboard(label: String, text: String, sensitive: Boolean) {
